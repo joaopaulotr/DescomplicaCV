@@ -51,7 +51,18 @@ app.add_middleware(
     allow_methods=["*"],  # Permite todos os métodos HTTP (GET, POST, etc.)
     allow_headers=["*"],  # Permite todos os cabeçalhos HTTP
 )
-#=========================================================================================
+
+
+@app.get("/")
+def home():
+    """
+    Endpoint raiz da API.
+    
+    Returns:
+        dict: Mensagem de boas-vindas e informações básicas sobre a API
+    """
+    return {"message": "Bem-vindo à API DescomplicaCV!"}
+
 
 @app.post("/convert-cv")
 async def convert_cv(file: UploadFile = File(...)):
@@ -148,7 +159,6 @@ async def convert_cv(file: UploadFile = File(...)):
             detail=f"Tipo de arquivo {ext} não suportado. Por favor, envie um arquivo PDF, DOCX ou TXT."
         )
 
-#=========================================================================================
 
 # Rota temporária para testes - será substituída pela implementação real no futuro
 @app.post("/return-pdf")
@@ -188,3 +198,10 @@ async def return_pdf(file: UploadFile = File(...)):
     )
 
 
+# Para iniciar o servidor em desenvolvimento:
+# cd backend-python
+# uvicorn main:app --reload
+
+# Se estiver dentro da pasta venv:
+# cd venv
+# uvicorn main:app --reload
