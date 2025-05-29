@@ -1,0 +1,16 @@
+# API e servidor
+fastapi>=0.115.0
+uvicorn>=0.34.0
+python-multipart>=0.0.9
+
+# Processamento de documentos
+pymupdf>=1.26.0
+python-docx>=1.1.0
+
+# Processamento de linguagem natural
+spacy>=3.8.0
+# Depois de instalar o spacy, você precisa rodar:
+# python -m spacy download pt_core_news_sm
+
+# Geração de PDF
+reportlab>=4.0.0

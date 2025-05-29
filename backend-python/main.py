@@ -21,11 +21,14 @@ pip install fastapi uvicorn python-multipart pymupdf python-docx
 
 import os
 import io
+import json
 from fastapi import FastAPI, UploadFile, HTTPException, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 import fitz  # PyMuPDF - Biblioteca para manipulação de PDFs
 from docx import Document  # python-docx - Biblioteca para manipulação de arquivos DOCX
+import spacy  # Biblioteca para processamento de linguagem natural
+from spacy.matcher import Matcher  # Matcher para busca de padrões no texto
 
 
 # Criando a instância do FastAPI com metadados
@@ -34,6 +37,45 @@ app = FastAPI(
     version="0.1.0",
     description="API para conversão de currículos para o formato PDF padronizado"
 )
+
+# Carregando o modelo spaCy para português
+try:
+    nlp = spacy.load("pt_core_news_sm")
+    print("Modelo spaCy carregado com sucesso!")
+except Exception as e:
+    print(f"Erro ao carregar o modelo spaCy: {str(e)}")
+    nlp = None  # Se houver erro, define como None para tratamento posterior
+
+# Inicializando o matcher do spaCy para identificar padrões relevantes
+matcher = Matcher(nlp.vocab) if nlp else None
+
+# Adicionar padrões para encontrar informações relevantes em currículos
+if matcher:
+    # Padrão para e-mail
+    matcher.add("EMAIL", [[{"LIKE_EMAIL": True}]])
+    
+    # Padrão para telefone (simplificado)
+    matcher.add("TELEFONE", [
+        [{"SHAPE": "dd-dddd-dddd"}],
+        [{"SHAPE": "ddddd-dddd"}],
+        [{"SHAPE": "(dd)dddd-dddd"}],
+        [{"SHAPE": "(dd)ddddd-dddd"}],
+        [{"TEXT": {"REGEX": r"\(\d{2}\)\s?\d{4,5}-?\d{4}"}}]
+    ])
+    
+    # Padrão para educação
+    matcher.add("EDUCACAO", [
+        [{"LOWER": {"IN": ["graduação", "graduacao", "formação", "formacao", "bacharel", "bacharelado", "licenciatura"]}}, 
+         {"IS_ALPHA": True, "OP": "*"}],
+        [{"LOWER": {"IN": ["mestrado", "doutorado", "especialização", "especializacao", "pós-graduação", "pos-graduacao"]}}, 
+         {"IS_ALPHA": True, "OP": "*"}]
+    ])
+    
+    # Padrão para experiência
+    matcher.add("EXPERIENCIA", [
+        [{"LOWER": {"IN": ["experiência", "experiencia", "profissional", "trabalhou", "atuou"]}}, 
+         {"IS_ALPHA": True, "OP": "*"}]
+    ])
 
 # Configuração do CORS (Cross-Origin Resource Sharing)
 # Permite que o frontend Vue.js (rodando em outra porta) acesse esta API
@@ -51,33 +93,21 @@ app.add_middleware(
     allow_methods=["*"],  # Permite todos os métodos HTTP (GET, POST, etc.)
     allow_headers=["*"],  # Permite todos os cabeçalhos HTTP
 )
+#=========================================================================================
 
-
-@app.get("/")
-def home():
-    """
-    Endpoint raiz da API.
-    
-    Returns:
-        dict: Mensagem de boas-vindas e informações básicas sobre a API
-    """
-    return {"message": "Bem-vindo à API DescomplicaCV!"}
-
-
-@app.post("/convert-cv")
-async def convert_cv(file: UploadFile = File(...)):
+@app.post("/upload_cv")
+async def upload_cv(file: UploadFile = File(...)):
     """
     Endpoint para receber e processar arquivos de currículo em diferentes formatos.
     
     Aceita arquivos PDF, DOCX e TXT, processando-os de acordo com o tipo.
-    Não salva nada em disco, apenas analisa o conteúdo e retorna informações.
+    Utiliza spaCy para analisar o conteúdo e extrair informações relevantes.
     
     Parameters:
         file (UploadFile): O arquivo de currículo enviado pelo cliente
         
     Returns:
-        dict: Mensagem indicando o sucesso do processamento e informações do arquivo
-        FileResponse: No futuro, um PDF convertido
+        dict: Informações extraídas do currículo e metadados do arquivo
         
     Raises:
         HTTPException: Em caso de erro no processamento do arquivo
@@ -96,9 +126,17 @@ async def convert_cv(file: UploadFile = File(...)):
             pdf = fitz.open(stream=content, filetype="pdf")
             num_pages = len(pdf)
             
-            # Em uma versão futura, aqui ficaria a lógica para converter o PDF
-            # Mas por enquanto, apenas extraímos algumas informações
+            # Extrair o texto completo de todas as páginas do PDF
+            texto_completo = ""
+            for page_num in range(num_pages):
+                page = pdf[page_num]
+                texto_completo += page.get_text()
+            
+            # Informações adicionais do documento
             metadata = pdf.metadata
+            
+            # Extrair informações usando spaCy
+            info_extraidas = extrair_informacoes_cv(texto_completo)
             
             return {
                 "filename": filename,
@@ -106,12 +144,13 @@ async def convert_cv(file: UploadFile = File(...)):
                 "pages": num_pages,
                 "title": metadata.get("title", "Sem título"),
                 "author": metadata.get("author", "Autor desconhecido"),
-                "message": "PDF analisado com sucesso!"
+                "texto_completo": texto_completo[:500] + "..." if len(texto_completo) > 500 else texto_completo,
+                "info_extraidas": info_extraidas,
+                "message": "PDF analisado com sucesso! Informações extraídas."
             }
             
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Arquivo PDF inválido ou corrompido: {str(e)}")
-    
     elif ext == ".docx":
         try:
             # Cria um objeto BytesIO para trabalhar com o arquivo em memória
@@ -120,33 +159,42 @@ async def convert_cv(file: UploadFile = File(...)):
             # Carrega o documento DOCX na memória
             doc = Document(docx_bytes)
             
-            # Extrai informações do documento
+            # Extrai o texto completo de todos os parágrafos
+            texto_completo = "\n".join([p.text for p in doc.paragraphs])
+            
+            # Informações adicionais do documento
             paragraphs_count = len(doc.paragraphs)
-            text_sample = doc.paragraphs[0].text if doc.paragraphs else ""
+            
+            # Extrair informações usando spaCy
+            info_extraidas = extrair_informacoes_cv(texto_completo)
             
             return {
                 "filename": filename,
                 "format": "docx",
                 "paragraphs": paragraphs_count,
-                "text_sample": text_sample[:100] + "..." if len(text_sample) > 100 else text_sample,
-                "message": "DOCX analisado com sucesso!"
+                "texto_completo": texto_completo[:500] + "..." if len(texto_completo) > 500 else texto_completo,
+                "info_extraidas": info_extraidas,
+                "message": "DOCX analisado com sucesso! Informações extraídas."
             }
             
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Erro ao processar DOCX: {str(e)}")
-    
     elif ext == ".txt":
         try:
             # Converte o conteúdo binário para texto com codificação UTF-8
-            texto = content.decode("utf-8")
-            lines = texto.count("\n") + 1
+            texto_completo = content.decode("utf-8")
+            lines = texto_completo.count("\n") + 1
+            
+            # Extrair informações usando spaCy
+            info_extraidas = extrair_informacoes_cv(texto_completo)
             
             return {
                 "filename": filename,
                 "format": "txt",
                 "lines": lines,
-                "text_sample": texto[:100] + "..." if len(texto) > 100 else texto,
-                "message": "Arquivo TXT analisado com sucesso!"
+                "texto_completo": texto_completo[:500] + "..." if len(texto_completo) > 500 else texto_completo,
+                "info_extraidas": info_extraidas,
+                "message": "Arquivo TXT analisado com sucesso! Informações extraídas."
             }
             
         except Exception as e:
@@ -159,49 +207,88 @@ async def convert_cv(file: UploadFile = File(...)):
             detail=f"Tipo de arquivo {ext} não suportado. Por favor, envie um arquivo PDF, DOCX ou TXT."
         )
 
-
-# Rota temporária para testes - será substituída pela implementação real no futuro
-@app.post("/return-pdf")
-async def return_pdf(file: UploadFile = File(...)):
+def extrair_informacoes_cv(texto):
     """
-    Endpoint temporário para testes que recebe um arquivo e simplesmente retorna um PDF de exemplo.
+    Extrai informações relevantes do texto do currículo usando spaCy.
     
-    No futuro, este endpoint será substituído pelo endpoint real de conversão
-    que gerará um PDF formatado a partir do conteúdo do currículo.
-    
-    Parameters:
-        file (UploadFile): O arquivo de currículo enviado pelo cliente
+    Args:
+        texto (str): O texto completo do currículo
         
     Returns:
-        FileResponse: Um arquivo PDF fixo para testes
+        dict: Dicionário contendo as informações extraídas
     """
-    # Este é apenas um endpoint de mockup que retorna um PDF de exemplo
-    # Na implementação real, você usaria os dados do currículo para gerar um PDF personalizado
+    # Verifica se o spaCy foi inicializado corretamente
+    if nlp is None:
+        return {
+            "erro": "Modelo spaCy não está disponível",
+            "contatos": [],
+            "educacao": [],
+            "experiencia": [],
+            "habilidades": []
+        }
     
-    # Caminho para um PDF de exemplo - substitua pelo caminho correto em sua máquina
-    # ou implemente uma geração dinâmica de PDF com uma biblioteca como ReportLab
-    sample_pdf_path = "exemplo.pdf"
+    # Processa o texto com spaCy
+    doc = nlp(texto)
     
-    # Verificar se o arquivo existe, caso contrário, retornar erro
-    if not os.path.exists(sample_pdf_path):
-        # Código para criar um PDF simples com ReportLab ou outra biblioteca poderia ir aqui
-        raise HTTPException(
-            status_code=501, 
-            detail="Funcionalidade em desenvolvimento. Nenhum PDF de exemplo disponível."
-        )
+    # Dicionário para armazenar os resultados
+    resultados = {
+        "contatos": [],
+        "educacao": [],
+        "experiencia": [],
+        "habilidades": []
+    }
     
-    # Retorna o PDF como uma resposta de arquivo
-    return FileResponse(
-        path=sample_pdf_path, 
-        filename="curriculo_convertido.pdf", 
-        media_type="application/pdf"
-    )
+    # Extrair entidades nomeadas (pessoas, organizações, locais)
+    for ent in doc.ents:
+        if ent.label_ == "PER" and len(resultados.get("nome", "")) == 0:
+            resultados["nome"] = ent.text
+        elif ent.label_ == "ORG":
+            if "organizacoes" not in resultados:
+                resultados["organizacoes"] = []
+            resultados["organizacoes"].append(ent.text)
+        elif ent.label_ == "LOC":
+            if "localizacoes" not in resultados:
+                resultados["localizacoes"] = []
+            resultados["localizacoes"].append(ent.text)
+    
+    # Usar o matcher para encontrar padrões específicos
+    matches = matcher(doc)
+    for match_id, start, end in matches:
+        string_id = nlp.vocab.strings[match_id]  # Obtém o nome do padrão
+        span = doc[start:end]  # O texto que correspondeu ao padrão
+        
+        if string_id == "EMAIL":
+            resultados["contatos"].append({"tipo": "email", "valor": span.text})
+        elif string_id == "TELEFONE":
+            resultados["contatos"].append({"tipo": "telefone", "valor": span.text})
+        elif string_id == "EDUCACAO":
+            # Capturar o contexto ao redor da educação (3 tokens antes e depois)
+            contexto_inicio = max(0, start - 3)
+            contexto_fim = min(len(doc), end + 3)
+            contexto = doc[contexto_inicio:contexto_fim].text
+            resultados["educacao"].append(contexto)
+        elif string_id == "EXPERIENCIA":
+            # Capturar o contexto ao redor da experiência (3 tokens antes e depois)
+            contexto_inicio = max(0, start - 3)
+            contexto_fim = min(len(doc), end + 3)
+            contexto = doc[contexto_inicio:contexto_fim].text
+            resultados["experiencia"].append(contexto)
+    
+    # Identificar possíveis habilidades (substantivos e frases nominais não capturados em outras categorias)
+    for chunk in doc.noun_chunks:
+        # Se a chunk tiver entre 2 e 5 tokens, pode ser uma habilidade
+        if 2 <= len(chunk) <= 5 and chunk.text.lower() not in [item.lower() for sublist in resultados.values() if isinstance(sublist, list) for item in sublist]:
+            resultados["habilidades"].append(chunk.text)
+    
+    # Limitar o número de habilidades para evitar ruído
+    if len(resultados["habilidades"]) > 10:
+        resultados["habilidades"] = resultados["habilidades"][:10]
+    
+    # Remover duplicatas
+    for key in resultados:
+        if isinstance(resultados[key], list):
+            resultados[key] = list(dict.fromkeys(resultados[key]))
+    
+    return resultados
 
-
-# Para iniciar o servidor em desenvolvimento:
-# cd backend-python
-# uvicorn main:app --reload
-
-# Se estiver dentro da pasta venv:
-# cd venv
-# uvicorn main:app --reload
+#=========================================================================================
