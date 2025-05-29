@@ -75,3 +75,40 @@ Este projeto consiste em duas partes principais:
 
 - **Backend**: Python, FastAPI, spaCy, PyMuPDF, python-docx
 - **Frontend**: Vue.js 3, Vite, Axios
+
+## Estrutura do Projeto
+
+```
+DescomplicaCV/
+├── backend-python/       # Backend da aplicação em Python
+│   ├── main.py           # Arquivo principal com endpoints FastAPI
+│   └── requirements.txt  # Dependências do Python
+│
+└── frontend-vue/         # Frontend da aplicação em Vue.js
+    ├── public/           # Arquivos públicos do Vue
+    ├── src/              # Código-fonte do Vue
+    │   ├── assets/       # Recursos estáticos (CSS, imagens)
+    │   ├── components/   # Componentes Vue reutilizáveis
+    │   ├── router/       # Configuração de rotas
+    │   ├── services/     # Serviços para API
+    │   ├── stores/       # Store Pinia/Vuex
+    │   ├── utils/        # Utilitários
+    │   └── views/        # Páginas/visualizações Vue
+    └── package.json      # Dependências do Node.js
+```
+
+## Contribuições
+
+Contribuições são sempre bem-vindas! Se você deseja contribuir com este projeto, por favor siga estas etapas:
+
+1. Faça um fork do repositório
+2. Crie uma branch para sua feature (`git checkout -b feature/nova-funcionalidade`)
+3. Faça commit das suas mudanças (`git commit -am 'Adiciona nova funcionalidade'`)
+4. Envie para a branch (`git push origin feature/nova-funcionalidade`)
+5. Crie um novo Pull Request
+
+Para mais detalhes, veja o arquivo [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Licença
+
+Este projeto está licenciado sob a licença MIT - veja o arquivo [LICENSE](LICENSE) para mais detalhes.
